@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>AI Chat Share Extension</title>
+</head>
+<body>
+
+<!-- manifest.json -->
+<script type="application/json" id="manifest">
+{
+  "manifest_version": 3,
+  "name": "AI Chat Share",
+  "version": "1.0",
+  "description": "Share conversations across different AI chat services",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "https://chat.openai.com/*",
+    "https://claude.ai/*",
+    "https://www.deepseek.com/*",
+    "https://qwen.chat/*",
+    "*://*/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AI Chat Share"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"]
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}
+</script>
+
+<!-- popup.html -->
+<div id="popup" style="width: 300px; padding: 15px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+  <h3 style="margin: 0 0 15px 0; color: #333;">AI Chat Share</h3>
+  
+  <div style="margin-bottom: 15px;">
+    <button id="extractChat" style="width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; margin-bottom: 10px;">
+      📤 Extract Current Chat
+    </button>
+    
+    <button id="importChat" style="width: 100%; padding: 10px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer;">
+      📥 Import Chat
+    </button>
+  </div>
+
+  <div style="margin-bottom: 15px;">
+    <label style="display: block; margin-bottom: 5px; font-weight: 500;">Export Format:</label>
+    <select id="exportFormat" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+      <option value="json">JSON</option>
+      <option value="markdown">Markdown</option>
+      <option value="plain">Plain Text</option>
+    </select>
+  </div>
+
+  <div id="status" style="padding: 10px; border-radius: 4px; margin-top: 10px; display: none;"></div>
+
+  <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee;">
+    <h4 style="margin: 0 0 10px 0; color: #666; font-size: 14px;">Supported Services:</h4>
+    <div style="font-size: 12px; color: #888;">
+      • ChatGPT (OpenAI)<br>
+      • Claude (Anthropic)<br>
+      • DeepSeek Chat<br>
+      • Qwen Chat<br>
+      • And more...
+    </div>
+  </div>
+</div>
+
+<script>
+// popup.js
+document.addEventListener('DOMContentLoaded', function() {
+  const extractBtn = document.getElementById('extractChat');
+  const importBtn = document.getElementById('importChat');
+  const formatSelect = document.getElementById('exportFormat');
+  const status = document.getElementById('status');
+
+  function showStatus(message, type = 'info') {
+    status.style.display = 'block';
+    status.style.backgroundColor = type === 'error' ? '#f8d7da' : '#d4edda';
+    status.style.color = type === 'error' ? '#721c24' : '#155724';
+    status.style.border = `1px solid ${type === 'error' ? '#f5c6cb' : '#c3e6cb'}`;
+    status.textContent = message;
+    
+    setTimeout(() => {
+      status.style.display = 'none';
+    }, 3000);
+  }
+
+  extractBtn.addEventListener('click', async function() {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      
+      const result = await chrome.tabs.sendMessage(tab.id, {
+        action: 'extractChat',
+        format: formatSelect.value
+      });
+
+      if (result && result.success) {
+        await navigator.clipboard.writeText(result.data);
+        showStatus('Chat extracted and copied to clipboard!');
+      } else {
+        showStatus('No chat found on this page', 'error');
+      }
+    } catch (error) {
+      showStatus('Error extracting chat', 'error');
+    }
+  });
+
+  importBtn.addEventListener('click', function() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,.md,.txt';
+    
+    input.onchange = function(event) {
+      const file = event.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = async function(e) {
+          try {
+            const content = e.target.result;
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            
+            const result = await chrome.tabs.sendMessage(tab.id, {
+              action: 'importChat',
+              data: content,
+              filename: file.name
+            });
+
+            if (result && result.success) {
+              showStatus('Chat imported successfully!');
+            } else {
+              showStatus('Failed to import chat', 'error');
+            }
+          } catch (error) {
+            showStatus('Error reading file', 'error');
+          }
+        };
+        reader.readAsText(file);
+      }
+    };
+    
+    input.click();
+  });
+});
+</script>
+
+<script type="application/javascript" id="content-script">
+// content.js
+class ChatExtractor {
+  constructor() {
+    this.services = {
+      'chat.openai.com': this.extractChatGPT.bind(this),
+      'claude.ai': this.extractClaude.bind(this),
+      'www.deepseek.com': this.extractDeepSeek.bind(this),
+      'qwen.chat': this.extractQwen.bind(this)
+    };
+  }
+
+  detectService() {
+    const hostname = window.location.hostname;
+    return this.services[hostname] || this.extractGeneric.bind(this);
+  }
+
+  extractChatGPT() {
+    const messages = [];
+    const chatElements = document.querySelectorAll('[data-message-author-role]');
+    
+    chatElements.forEach(element => {
+      const role = element.getAttribute('data-message-author-role');
+      const content = element.querySelector('.markdown, .whitespace-pre-wrap');
+      
+      if (content) {
+        messages.push({
+          role: role === 'user' ? 'user' : 'assistant',
+          content: content.textContent.trim(),
+          timestamp: new Date().toISOString()
+        });
+      }
+    });
+
+    return messages;
+  }
+
+  extractClaude() {
+    const messages = [];
+    const chatContainer = document.querySelector('[data-testid="conversation"]') || document.querySelector('.conversation');
+    
+    if (chatContainer) {
+      const messageElements = chatContainer.querySelectorAll('[data-testid*="message"], .message');
+      
+      messageElements.forEach(element => {
+        const isUser = element.querySelector('[data-testid="user-message"]') || 
+                      element.classList.contains('user-message') ||
+                      element.querySelector('.user');
+        
+        const contentEl = element.querySelector('.prose, .message-content, p') || element;
+        
+        if (contentEl && contentEl.textContent.trim()) {
+          messages.push({
+            role: isUser ? 'user' : 'assistant',
+            content: contentEl.textContent.trim(),
+            timestamp: new Date().toISOString()
+          });
+        }
+      });
+    }
+
+    return messages;
+  }
+
+  extractDeepSeek() {
+    const messages = [];
+    const messageElements = document.querySelectorAll('.message, [class*="message"], [class*="chat"]');
+    
+    messageElements.forEach(element => {
+      const isUser = element.classList.contains('user') || 
+                    element.querySelector('.user') ||
+                    element.querySelector('[class*="user"]');
+      
+      const content = element.textContent.trim();
+      if (content) {
+        messages.push({
+          role: isUser ? 'user' : 'assistant',
+          content: content,
+          timestamp: new Date().toISOString()
+        });
+      }
+    });
+
+    return messages;
+  }
+
+  extractQwen() {
+    return this.extractGeneric();
+  }
+
+  extractGeneric() {
+    const messages = [];
+    
+    // Try multiple common selectors for chat interfaces
+    const selectors = [
+      '.message', '.chat-message', '[class*="message"]',
+      '.conversation-item', '[data-role]', '.chat-item',
+      '[class*="chat"]', '[class*="conversation"]'
+    ];
+
+    for (const selector of selectors) {
+      const elements = document.querySelectorAll(selector);
+      if (elements.length > 0) {
+        elements.forEach(element => {
+          const content = element.textContent.trim();
+          if (content && content.length > 10) {
+            // Try to detect if it's a user or assistant message
+            const isUser = element.classList.contains('user') ||
+                          element.querySelector('.user') ||
+                          element.getAttribute('data-role') === 'user' ||
+                          content.toLowerCase().includes('you:') ||
+                          content.toLowerCase().includes('user:');
+
+            messages.push({
+              role: isUser ? 'user' : 'assistant',
+              content: content,
+              timestamp: new Date().toISOString()
+            });
+          }
+        });
+        break;
+      }
+    }
+
+    return messages;
+  }
+
+  formatMessages(messages, format) {
+    const metadata = {
+      service: window.location.hostname,
+      url: window.location.href,
+      extractedAt: new Date().toISOString(),
+      messageCount: messages.length
+    };
+
+    switch (format) {
+      case 'json':
+        return JSON.stringify({ metadata, messages }, null, 2);
+      
+      case 'markdown':
+        let md = `# Chat Export\n\n`;
+        md += `**Service:** ${metadata.service}\n`;
+        md += `**Extracted:** ${new Date(metadata.extractedAt).toLocaleString()}\n`;
+        md += `**Messages:** ${metadata.messageCount}\n\n---\n\n`;
+        
+        messages.forEach((msg, index) => {
+          md += `## ${msg.role === 'user' ? '👤 User' : '🤖 Assistant'}\n\n`;
+          md += `${msg.content}\n\n`;
+        });
+        return md;
+      
+      case 'plain':
+        let txt = `Chat Export from ${metadata.service}\n`;
+        txt += `Extracted: ${new Date(metadata.extractedAt).toLocaleString()}\n`;
+        txt += `Messages: ${metadata.messageCount}\n\n`;
+        txt += '='.repeat(50) + '\n\n';
+        
+        messages.forEach((msg, index) => {
+          txt += `[${msg.role.toUpperCase()}]: ${msg.content}\n\n`;
+        });
+        return txt;
+      
+      default:
+        return JSON.stringify({ metadata, messages }, null, 2);
+    }
+  }
+
+  async import(data, filename) {
+    try {
+      let messages;
+      
+      if (filename.endsWith('.json')) {
+        const parsed = JSON.parse(data);
+        messages = parsed.messages || parsed;
+      } else {
+        // Parse markdown or plain text
+        messages = this.parseTextFormat(data);
+      }
+
+      // Try to fill the chat input on the current service
+      return this.fillChatInput(messages);
+    } catch (error) {
+      console.error('Import error:', error);
+      return false;
+    }
+  }
+
+  parseTextFormat(text) {
+    const messages = [];
+    const lines = text.split('\n');
+    let currentMessage = null;
+
+    lines.forEach(line => {
+      const userMatch = line.match(/^\[?(?:USER|👤)\]?:?\s*(.+)$/i);
+      const assistantMatch = line.match(/^\[?(?:ASSISTANT|🤖|AI)\]?:?\s*(.+)$/i);
+
+      if (userMatch) {
+        if (currentMessage) messages.push(currentMessage);
+        currentMessage = { role: 'user', content: userMatch[1] };
+      } else if (assistantMatch) {
+        if (currentMessage) messages.push(currentMessage);
+        currentMessage = { role: 'assistant', content: assistantMatch[1] };
+      } else if (currentMessage && line.trim()) {
+        currentMessage.content += '\n' + line;
+      }
+    });
+
+    if (currentMessage) messages.push(currentMessage);
+    return messages;
+  }
+
+  fillChatInput(messages) {
+    // Find chat input field using common selectors
+    const inputSelectors = [
+      'textarea[placeholder*="message"]',
+      'textarea[placeholder*="chat"]',
+      'input[type="text"][placeholder*="message"]',
+      '#prompt-textarea',
+      '.chat-input textarea',
+      '[data-testid*="input"]',
+      'textarea'
+    ];
+
+    let inputField = null;
+    for (const selector of inputSelectors) {
+      inputField = document.querySelector(selector);
+      if (inputField) break;
+    }
+
+    if (inputField) {
+      // Format messages for pasting
+      const formattedChat = messages.map(msg => 
+        `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`
+      ).join('\n\n');
+
+      inputField.value = formattedChat;
+      inputField.focus();
+      
+      // Trigger input events to ensure the interface updates
+      inputField.dispatchEvent(new Event('input', { bubbles: true }));
+      inputField.dispatchEvent(new Event('change', { bubbles: true }));
+      
+      return true;
+    }
+
+    return false;
+  }
+}
+
+// Initialize extractor
+const extractor = new ChatExtractor();
+
+// Message listener
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'extractChat') {
+    try {
+      const extractFunction = extractor.detectService();
+      const messages = extractFunction();
+      
+      if (messages.length > 0) {
+        const formatted = extractor.formatMessages(messages, request.format);
+        sendResponse({ success: true, data: formatted });
+      } else {
+        sendResponse({ success: false, error: 'No messages found' });
+      }
+    } catch (error) {
+      sendResponse({ success: false, error: error.message });
+    }
+  } else if (request.action === 'importChat') {
+    try {
+      const success = extractor.import(request.data, request.filename);
+      sendResponse({ success });
+    } catch (error) {
+      sendResponse({ success: false, error: error.message });
+    }
+  }
+  
+  return true;
+});
+</script>
+
+<script type="application/javascript" id="background-script">
+// background.js
+chrome.action.onClicked.addListener((tab) => {
+  chrome.action.openPopup();
+});
+
+// Handle storage and sync
+chrome.storage.onChanged.addListener((changes, namespace) => {
+  if (namespace === 'sync') {
+    console.log('Chat data synced:', changes);
+  }
+});
+
+// Context menu for quick actions
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.create({
+    id: 'extractChat',
+    title: 'Extract Chat',
+    contexts: ['page']
+  });
+  
+  chrome.contextMenus.create({
+    id: 'quickShare',
+    title: 'Quick Share to Clipboard',
+    contexts: ['page']
+  });
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId === 'extractChat' || info.menuItemId === 'quickShare') {
+    try {
+      const result = await chrome.tabs.sendMessage(tab.id, {
+        action: 'extractChat',
+        format: 'json'
+      });
+
+      if (result && result.success) {
+        // Copy to clipboard via content script
+        await chrome.tabs.sendMessage(tab.id, {
+          action: 'copyToClipboard',
+          data: result.data
+        });
+      }
+    } catch (error) {
+      console.error('Context menu action failed:', error);
+    }
+  }
+});
+</script>
+
+<style>
+/* popup.css */
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+button {
+  transition: all 0.2s ease;
+}
+
+button:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+button:active {
+  transform: translateY(0);
+}
+
+select {
+  font-family: inherit;
+}
+
+.status-success {
+  background-color: #d4edda;
+  color: #155724;
+  border: 1px solid #c3e6cb;
+}
+
+.status-error {
+  background-color: #f8d7da;
+  color: #721c24;
+  border: 1px solid #f5c6cb;
+}
+</style>
+
+</body>
+</html>
