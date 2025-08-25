@@ -1,0 +1,10 @@
+__pycache__/
+storage/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+.env
+.git
+node_modules/
+frontend/

@@ -3,21 +3,16 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
-from app.user_store import get_user, create_user
 from app.user_store import get_user
-from passlib.context import CryptContext
+import os
 
-
-SECRET_KEY = "yoursecretkey"
+import os
+SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
-
-
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 

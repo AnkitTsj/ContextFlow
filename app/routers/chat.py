@@ -13,14 +13,6 @@ class ExtractRequest(BaseModel):
     chat_text: str
 
 
-@router.post("/import")
-async def import_chat(body: ChatIn, current_user: dict = Depends(get_current_user)):
-    return {
-        "message": "Chat imported",
-        "session_id": "dummy-session",
-        "chat_text": body.chat_text,
-        "user": current_user["username"]
-    }
 
 @router.post("/extract-context")
 async def extract_context_api(body: ExtractRequest, current_user: dict = Depends(get_current_user)):
@@ -52,7 +44,7 @@ async def get_sessions(current_user: dict = Depends(get_current_user)):
         sessions = list_sessions(current_user["username"])
         return {"sessions": sessions}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error retrieving sessions: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving session.")
 from fastapi import Depends
 from app.auth import get_current_user 
 from app.utils.storage import delete_session
@@ -64,3 +56,6 @@ async def delete_context(session_id: str, current_user: dict = Depends(get_curre
         return {"ok": True, "message": "Session deleted."}
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Session not found")
+    
+
+
